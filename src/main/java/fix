@@ -1,67 +1,44 @@
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# UZUPELNIJ: plik drivera faktycznie uzywany przez testy
-$driverPath = 'C:\UZUPELNIJ\chromedriver.exe'
-$chromePath = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+$version = '152.0.7977.7500'
+$url = "https://artifactory.mbank.pl/artifactory/nuget-external-cache/Selenium.WebDriver.ChromeDriver.$version.nupkg"
+$driverPath = Join-Path $env:WORKSPACE 'out\chromedriver.exe'
+$tempDir = Join-Path $env:TEMP ("driver-" + [guid]::NewGuid())
 
 if (!(Test-Path -LiteralPath $driverPath -PathType Leaf)) {
-    throw "Nie znaleziono drivera. Popraw driverPath: $driverPath"
-}
-if (!(Test-Path -LiteralPath $chromePath -PathType Leaf)) {
-    throw "Nie znaleziono Chrome: $chromePath"
+    throw "Nie znaleziono drivera do podmiany: $driverPath"
 }
 
-$chromeVersion = (Get-Item -LiteralPath $chromePath).VersionInfo.ProductVersion
-if ($chromeVersion -notmatch '(\d+)\.(\d+)\.(\d+)\.(\d+)') {
-    throw "Nie rozpoznano wersji Chrome: $chromeVersion"
-}
-$major = $Matches[1]
-$build = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
-
-$base = 'https://googlechromelabs.github.io/chrome-for-testing'
-$metadata = Invoke-RestMethod "$base/latest-patch-versions-per-build-with-downloads.json"
-$release = $metadata.builds.PSObject.Properties[$build].Value
-
-if (!$release) {
-    $metadata = Invoke-RestMethod "$base/latest-versions-per-milestone-with-downloads.json"
-    $release = $metadata.milestones.PSObject.Properties[$major].Value
-}
-
-$platform = if ([Environment]::Is64BitOperatingSystem) { 'win64' } else { 'win32' }
-$download = $release.downloads.chromedriver |
-    Where-Object { $_.platform -eq $platform } |
-    Select-Object -First 1
-
-if (!$download) {
-    throw "Brak dostepnego ChromeDrivera dla Chrome $chromeVersion"
-}
-
-$tempDir = Join-Path $env:TEMP ("chromedriver-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tempDir | Out-Null
 
 try {
-    $zip = Join-Path $tempDir 'driver.zip'
-    Invoke-WebRequest -Uri $download.url -OutFile $zip -UseBasicParsing
+    # Paczka NuGet jest archiwum ZIP.
+    $zip = Join-Path $tempDir 'package.zip'
+    Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
     Expand-Archive -LiteralPath $zip -DestinationPath $tempDir
 
-    $newDriver = Join-Path $tempDir "chromedriver-$platform\chromedriver.exe"
-    $versionOutput = & $newDriver --version
-    if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch "^ChromeDriver $major\.") {
-        throw "Weryfikacja pobranego drivera nie powiodla sie: $versionOutput"
+    $newDriver = Join-Path $tempDir 'driver\win32\chromedriver.exe'
+    if (!(Test-Path -LiteralPath $newDriver -PathType Leaf)) {
+        throw 'W paczce brakuje driver\win32\chromedriver.exe'
+    }
+
+    $result = & $newDriver --version
+    if ($LASTEXITCODE -ne 0 -or
+        $result -notmatch '^ChromeDriver 152\.0\.7977\.75(?:\s|$)') {
+        throw "Nieoczekiwana wersja drivera: $result"
     }
 
     $backup = "$driverPath.bak-$(Get-Date -Format yyyyMMddHHmmss)"
     Copy-Item -LiteralPath $driverPath -Destination $backup
     Copy-Item -LiteralPath $newDriver -Destination $driverPath -Force
 
-    Write-Host "Chrome: $chromeVersion"
-    Write-Host "Driver: $versionOutput"
-    Write-Host "Zaktualizowano: $driverPath"
+    Write-Host "Zainstalowano: $result"
+    Write-Host "Plik: $driverPath"
     Write-Host "Kopia: $backup"
 }
 finally {
     Remove-Item -LiteralPath $tempDir -Recurse -Force
 }
 
-# Ponizej pozostaw swoje dotychczasowe wywolanie .\TestScript.ps1
+# Tutaj pozostaw swoje wywolanie .\TestScript.ps1
